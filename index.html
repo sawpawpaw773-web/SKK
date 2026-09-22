@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>SKK Game</title>
+  <style>
+    body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #000; font-family: Arial, sans-serif; user-select: none; }
+    #canvas-container { width: 100%; height: 100%; display: block; }
+    #game-title { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); color: #f1c40f; font-size: 24px; font-weight: 900; z-index: 10; text-shadow: 2px 2px 6px #000; }
+    #hud { position: absolute; top: 15px; left: 15px; color: white; font-size: 16px; font-weight: bold; z-index: 10; }
+    .bar-bg { width: 150px; height: 15px; background: rgba(0,0,0,0.6); border: 2px solid #fff; border-radius: 8px; overflow: hidden; margin-top: 5px; }
+    #health-bar { width: 100%; height: 100%; background: #2ecc71; }
+    #crosshair { position: absolute; top: 50%; left: 50%; width: 12px; height: 12px; margin-left: -6px; margin-top: -6px; border: 2px solid rgba(255,255,255,0.8); border-radius: 50%; pointer-events: none; z-index: 10; }
+    #joystick-zone { position: absolute; bottom: 30px; left: 30px; width: 120px; height: 120px; background: rgba(255,255,255,0.15); border: 2px solid rgba(255,255,255,0.4); border-radius: 50%; touch-action: none; z-index: 20; }
+    #joystick-knob { position: absolute; top: 35px; left: 35px; width: 50px; height: 50px; background: rgba(255,255,255,0.6); border-radius: 50%; pointer-events: none; }
+    #shoot-btn { position: absolute; bottom: 40px; right: 30px; width: 80px; height: 80px; background: rgba(231,76,60,0.7); border: 3px solid #fff; border-radius: 50%; color: white; font-weight: bold; font-size: 16px; display: flex; justify-content: center; align-items: center; touch-action: none; z-index: 20; }
+    #game-over { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); color: white; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 30; display: none; }
+    #game-over button { margin-top: 20px; padding: 12px 25px; font-size: 18px; background: #e67e22; border: none; color: white; border-radius: 5px; font-weight: bold; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+  <div id="game-title">SKK GAME</div>
+  <div id="hud">
+    <div>KILLS: <span id="kill-count">0</span></div>
+    <div>ENEMIES LEFT: <span id="enemy-count">5</span></div>
+    <div class="bar-bg"><div id="health-bar"></div></div>
+  </div>
+  <div id="crosshair"></div>
+  <div id="joystick-zone"><div id="joystick-knob"></div></div>
+  <div id="shoot-btn">FIRE</div>
+  <div id="game-over">
+    <h1 id="game-result">GAME OVER</h1>
+    <p>Kills: <span id="final-kills">0</span></p>
+    <button onclick="restartGame()">PLAY AGAIN</button>
+  </div>
+  <div id="canvas-container"></div><script>
+    let scene, camera, renderer, player, health = 100, kills = 0, enemies = [], bullets = [], clock = new THREE.Clock();
+    let moveForward = 0, moveSide = 0, touchLookID = null, touchLookLastX = 0, touchLookLastY = 0, cameraYaw = 0, cameraPitch = 0;
+    const TOTAL_ENEMIES = 5;
+
+    function init() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87ceeb);
+      scene.fog = new THREE.FogExp2(0x87ceeb, 0.015);
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+      let dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(20, 40, 20);
+      scene.add(dirLight);
+
+      let ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshLambertMaterial({ color: 0x2e7d32 }));
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+
+      for(let i = 0; i < 20; i++) {
+        let box = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 3), new THREE.MeshLambertMaterial({ color: 0xd35400 }));
+        box.position.set((Math.random()-0.5)*120, 1.5, (Math.random()-0.5)*120);
+        scene.add(box);
+      }
+
+      player = new THREE.Object3D();
+      player.position.set(0, 1.6, 0);
+      scene.add(player);
+      player.add(camera);
+
+      let gun = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.5), new THREE.MeshLambertMaterial({ color: 0x333333 }));
+      gun.position.set(0.2, -0.15, -0.4);
+      camera.add(gun);
+
+      spawnEnemies();
+      setupControls();
+      window.addEventListener('resize', onWindowResize);
+      animate();
+    }
+
+    function spawnEnemies() {
+      for(let i = 0; i < TOTAL_ENEMIES; i++) {
+        let enemyGroup = new THREE.Group();
+        let body = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.8, 8), new THREE.MeshLambertMaterial({ color: 0xc0392b }));
+        body.position.y = 0.9;
+        enemyGroup.add(body);
+        enemyGroup.position.set((Math.random() - 0.5) * 100, 0, (Math.random() - 0.5) * 100);
+        scene.add(enemyGroup);
+        enemies.push({ mesh: enemyGroup, hp: 100, lastShoot: 0 });
+      }
+    }
+
+    function setupControls() {
+      const zone = document.getElementById('joystick-zone'), knob = document.getElementById('joystick-knob');
+      let touchID = null, startX = 0, startY = 0;
+      zone.addEventListener('touchstart', (e) => { let t = e.changedTouches[0]; touchID = t.identifier; startX = t.clientX; startY = t.clientY; });
+      zone.addEventListener('touchmove', (e) => {
+        for(let t of e.changedTouches) {
+          if(t.identifier === touchID) {
+            let dx = t.clientX - startX, dy = t.clientY - startY, dist = Math.min(Math.hypot(dx, dy), 40), angle = Math.atan2(dy, dx);
+            knob.style.transform = `translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px)`;
+            moveSide = Math.cos(angle) * (dist / 40); moveForward = -Math.sin(angle) * (dist / 40);
+          }
+        }
+      });
+      const resetJoystick = (e) => {
+        for(let t of e.changedTouches) { if(t.identifier === touchID) { touchID = null; knob.style.transform = 'translate(0px, 0px)'; moveForward = 0; moveSide = 0; } }
+      };
+      zone.addEventListener('touchend', resetJoystick);
+
+      window.addEventListener('touchstart', (e) => {
+        for(let t of e.changedTouches) {
+          if(t.clientX > window.innerWidth / 2 && touchLookID === null) { touchLookID = t.identifier; touchLookLastX = t.clientX; touchLookLastY = t.clientY; }
+        }
+      });
+      window.addEventListener('touchmove', (e) => {
+        for(let t of e.changedTouches) {
+          if(t.identifier === touchLookID) {
+            let dx = t.clientX - touchLookLastX, dy = t.clientY - touchLookLastY;
+            cameraYaw -= dx * 0.005; cameraPitch -= dy * 0.005;
+            cameraPitch = Math.max(-Math.PI/3, Math.min(Math.PI/3, cameraPitch));
+            player.rotation.y = cameraYaw; camera.rotation.x = cameraPitch;
+            touchLookLastX = t.clientX; touchLookLastY = t.clientY;
+          }
+        }
+      });
+      window.addEventListener('touchend', (e) => { for(let t of e.changedTouches) { if(t.identifier === touchLookID) touchLookID = null; } });
+
+      document.getElementById('shoot-btn').addEventListener('touchstart', (e) => { e.preventDefault(); shootBullet(); });
+    }
+
+    function shootBullet() {
+      if(health <= 0) return;
+      let bullet = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 8), new THREE.MeshBasicMaterial({ color: 0xf1c40f }));
+      let dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+      bullet.position.copy(player.position); bullet.position.y += 0.1;
+      bullet.velocity = dir.multiplyScalar(1.2);
+      scene.add(bullet); bullets.push(bullet);
+      setTimeout(() => { scene.remove(bullet); bullets = bullets.filter(b => b !== bullet); }, 2000);
+    }
+
+    function animate() {
+      if(health <= 0) return;
+      requestAnimationFrame(animate);
+      let delta = clock.getDelta();
+
+      if (moveForward !== 0 || moveSide !== 0) {
+        let moveDir = new THREE.Vector3(moveSide, 0, -moveForward).normalize();
+        moveDir.applyQuaternion(player.quaternion);
+        player.position.addScaledVector(moveDir, 8 * delta);
+      }
+
+      bullets.forEach((bullet) => {
+        bullet.position.add(bullet.velocity);
+        enemies.forEach((enemy, index) => {
+          if(bullet.position.distanceTo(enemy.mesh.position) < 1.2) {
+            enemy.hp -= 50; scene.remove(bullet);
+            if(enemy.hp <= 0) {
+              scene.remove(enemy.mesh); enemies.splice(index, 1); kills++;
+              document.getElementById('kill-count').innerText = kills;
+              document.getElementById('enemy-count').innerText = enemies.length;
+              if(enemies.length === 0) endGame(true);
+            }
+          }
+        });
+      });
+
+      enemies.forEach((enemy) => {
+        let dist = enemy.mesh.position.distanceTo(player.position);
+        if(dist > 5 && dist < 40) {
+          let dir = new THREE.Vector3().subVectors(player.position, enemy.mesh.position).normalize();
+          enemy.mesh.position.addScaledVector(dir, 3 * delta);
+        }
+        if(dist < 25 && Date.now() - enemy.lastShoot > 1500) {
+          enemy.lastShoot = Date.now(); health -= 10;
+          document.getElementById('health-bar').style.width = health + '%';
+          if(health <= 0) endGame(false);
+        }
+      });
+
+      renderer.render(scene, camera);
+    }
+
+    function endGame(victory) {
+      document.getElementById('game-over').style.display = 'flex';
+      document.getElementById('game-result').innerText = victory ? "SKK VICTORY!" : "SKK GAME OVER!";
+      document.getElementById('final-kills').innerText = kills;
+    }
+
+    function restartGame() { location.reload(); }
+    function onWindowResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
+    window.onload = init;
+  </script>
+</body>
+</html>
